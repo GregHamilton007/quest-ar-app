@@ -201,10 +201,28 @@
                 }
                 
                 arSession = await navigator.xr.requestSession('immersive-ar', {
-                    requiredFeatures: ['local']
+                    requiredFeatures: ['local-floor'],
+                    optionalFeatures: ['local', 'bounded-floor']
                 });
                 
                 await renderer.xr.setSession(arSession);
+                
+                // Set up reference space with fallback
+                let referenceSpace;
+                try {
+                    referenceSpace = await arSession.requestReferenceSpace('local-floor');
+                } catch (e) {
+                    console.log('local-floor not supported, falling back to local');
+                    try {
+                        referenceSpace = await arSession.requestReferenceSpace('local');
+                    } catch (e2) {
+                        console.log('local not supported, falling back to viewer');
+                        referenceSpace = await arSession.requestReferenceSpace('viewer');
+                    }
+                }
+                
+                // Store reference space for later use
+                renderer.xr.setReferenceSpace(referenceSpace);
                 
                 arSession.addEventListener('end', () => {
                     isARActive = false;
@@ -258,7 +276,37 @@
         if (navigator.xr) {
             navigator.xr.isSessionSupported('immersive-ar').then(supported => {
                 if (supported) {
-                    statusDiv.textContent = 'Status: AR ready';
+                    statusDiv.textContent = 'Status: AR ready - checking reference spaces...';
+                    // Check what reference spaces are supported
+                    navigator.xr.requestSession('immersive-ar', {
+                        optionalFeatures: ['local', 'local-floor', 'bounded-floor', 'viewer']
+                    }).then(session => {
+                        const checkSpaces = async () => {
+                            const spaces = [];
+                            try {
+                                await session.requestReferenceSpace('local-floor');
+                                spaces.push('local-floor');
+                            } catch (e) {}
+                            try {
+                                await session.requestReferenceSpace('local');
+                                spaces.push('local');
+                            } catch (e) {}
+                            try {
+                                await session.requestReferenceSpace('viewer');
+                                spaces.push('viewer');
+                            } catch (e) {}
+                            try {
+                                await session.requestReferenceSpace('bounded-floor');
+                                spaces.push('bounded-floor');
+                            } catch (e) {}
+                            
+                            statusDiv.textContent = `Status: AR ready (${spaces.join(', ')})`;
+                        };
+                        checkSpaces();
+                        session.end();
+                    }).catch(() => {
+                        statusDiv.textContent = 'Status: AR ready (limited support)';
+                    });
                 } else {
                     statusDiv.textContent = 'Status: AR not supported';
                     startButton.disabled = true;
