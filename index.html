@@ -211,18 +211,20 @@
                 let referenceSpace;
                 try {
                     referenceSpace = await arSession.requestReferenceSpace('local-floor');
+                    console.log('Using local-floor reference space');
                 } catch (e) {
                     console.log('local-floor not supported, falling back to local');
                     try {
                         referenceSpace = await arSession.requestReferenceSpace('local');
+                        console.log('Using local reference space');
                     } catch (e2) {
                         console.log('local not supported, falling back to viewer');
                         referenceSpace = await arSession.requestReferenceSpace('viewer');
+                        console.log('Using viewer reference space');
                     }
                 }
                 
-                // Store reference space for later use
-                renderer.xr.setReferenceSpace(referenceSpace);
+                // Reference space is automatically handled by Three.js WebXR manager
                 
                 arSession.addEventListener('end', () => {
                     isARActive = false;
