@@ -63,6 +63,7 @@
         <h3>Quest AR Fixed Window</h3>
         <button id="startAR">Start AR Session</button>
         <button id="stopAR" disabled>Stop AR Session</button>
+        <button id="toggleMode">Toggle: Fixed Mode</button>
         <div id="status">Status: Not connected</div>
     </div>
     
@@ -73,10 +74,17 @@
         let scene, camera, renderer, arSession;
         let fixedWindow, windowGroup;
         let isARActive = false;
+        let controllers = [];
+        let isDragging = false;
+        let dragOffset = new THREE.Vector3();
+        let initialWindowPosition = new THREE.Vector3();
+        let raycaster = new THREE.Raycaster();
+        let isWindowFixed = true; // Toggle between fixed and free positioning
         
         // UI elements
         const startButton = document.getElementById('startAR');
         const stopButton = document.getElementById('stopAR');
+        const toggleButton = document.getElementById('toggleMode');
         const statusDiv = document.getElementById('status');
         const container = document.getElementById('container');
         
@@ -103,6 +111,9 @@
             const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
             directionalLight.position.set(0, 1, 0);
             scene.add(directionalLight);
+            
+            // Set up controllers
+            setupControllers();
         }
         
         function createFixedWindow() {
@@ -169,24 +180,140 @@
             scene.add(windowGroup);
         }
         
+        function setupControllers() {
+            // Set up controller 0 (right hand)
+            const controller1 = renderer.xr.getController(0);
+            controller1.addEventListener('selectstart', onSelectStart);
+            controller1.addEventListener('selectend', onSelectEnd);
+            scene.add(controller1);
+            
+            // Set up controller 1 (left hand)
+            const controller2 = renderer.xr.getController(1);
+            controller2.addEventListener('selectstart', onSelectStart);
+            controller2.addEventListener('selectend', onSelectEnd);
+            scene.add(controller2);
+            
+            controllers = [controller1, controller2];
+            
+            // Add visual rays for controllers
+            const geometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, -1)
+            ]);
+            
+            const material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+            
+            controllers.forEach(controller => {
+                const line = new THREE.Line(geometry, material);
+                line.name = 'line';
+                line.scale.z = 5;
+                controller.add(line);
+            });
+        }
+        
+        function onSelectStart(event) {
+            if (!windowGroup || isWindowFixed) return;
+            
+            const controller = event.target;
+            const intersections = getIntersections(controller);
+            
+            if (intersections.length > 0) {
+                const intersection = intersections[0];
+                if (intersection.object.parent === windowGroup || intersection.object === fixedWindow) {
+                    isDragging = true;
+                    
+                    // Store initial positions
+                    initialWindowPosition.copy(windowGroup.position);
+                    
+                    // Calculate offset from controller to window center
+                    dragOffset.subVectors(windowGroup.position, controller.position);
+                    
+                    // Visual feedback
+                    windowGroup.scale.set(1.1, 1.1, 1.1);
+                    
+                    // Update status
+                    statusDiv.textContent = 'Status: Dragging window';
+                }
+            }
+        }
+        
+        function onSelectEnd(event) {
+            if (isDragging) {
+                isDragging = false;
+                
+                // Reset scale
+                windowGroup.scale.set(1, 1, 1);
+                
+                // Update status
+                statusDiv.textContent = 'Status: AR session active';
+            }
+        }
+        
+        function getIntersections(controller) {
+            const tempMatrix = new THREE.Matrix4();
+            tempMatrix.identity().extractRotation(controller.matrixWorld);
+            
+            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+            
+            return raycaster.intersectObjects([fixedWindow], true);
+        }
+        
+        function updateDragging() {
+            if (!isDragging || !windowGroup) return;
+            
+            // Find the controller that's dragging
+            const draggingController = controllers.find(controller => {
+                const intersections = getIntersections(controller);
+                return intersections.length > 0;
+            });
+            
+            if (draggingController) {
+                // Move window to controller position plus offset
+                const newPosition = new THREE.Vector3();
+                newPosition.addVectors(draggingController.position, dragOffset);
+                windowGroup.position.copy(newPosition);
+            }
+        }
+        
+        function toggleWindowMode() {
+            isWindowFixed = !isWindowFixed;
+            const mode = isWindowFixed ? 'Fixed' : 'Draggable';
+            toggleButton.textContent = `Toggle: ${mode} Mode`;
+            
+            if (isWindowFixed) {
+                statusDiv.textContent = 'Status: AR session active (Fixed mode)';
+            } else {
+                statusDiv.textContent = 'Status: AR session active (Draggable mode)';
+            }
+        }
+        
         function updateWindowPosition() {
             if (!windowGroup || !camera) return;
             
-            // Get the camera's world position and rotation
-            const cameraPosition = new THREE.Vector3();
-            const cameraQuaternion = new THREE.Quaternion();
-            camera.getWorldPosition(cameraPosition);
-            camera.getWorldQuaternion(cameraQuaternion);
-            
-            // Calculate offset for top-right corner (adjusted for better visibility)
-            const offset = new THREE.Vector3(0.3, 0.15, -0.5);
-            offset.applyQuaternion(cameraQuaternion);
-            
-            // Position the window relative to camera
-            windowGroup.position.copy(cameraPosition).add(offset);
-            
-            // Make the window face the camera
-            windowGroup.lookAt(cameraPosition);
+            // Only update position automatically if in fixed mode and not dragging
+            if (isWindowFixed && !isDragging) {
+                // Get the camera's world position and rotation
+                const cameraPosition = new THREE.Vector3();
+                const cameraQuaternion = new THREE.Quaternion();
+                camera.getWorldPosition(cameraPosition);
+                camera.getWorldQuaternion(cameraQuaternion);
+                
+                // Calculate offset for top-right corner (adjusted for better visibility)
+                const offset = new THREE.Vector3(0.3, 0.15, -0.5);
+                offset.applyQuaternion(cameraQuaternion);
+                
+                // Position the window relative to camera
+                windowGroup.position.copy(cameraPosition).add(offset);
+                
+                // Make the window face the camera
+                windowGroup.lookAt(cameraPosition);
+            } else if (!isWindowFixed) {
+                // In draggable mode, always make window face the camera
+                const cameraPosition = new THREE.Vector3();
+                camera.getWorldPosition(cameraPosition);
+                windowGroup.lookAt(cameraPosition);
+            }
         }
         
         async function startARSession() {
@@ -256,6 +383,7 @@
         function render() {
             if (isARActive) {
                 updateWindowPosition();
+                updateDragging();
             }
             renderer.render(scene, camera);
         }
@@ -263,6 +391,7 @@
         // Event listeners
         startButton.addEventListener('click', startARSession);
         stopButton.addEventListener('click', stopARSession);
+        toggleButton.addEventListener('click', toggleWindowMode);
         
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -345,7 +474,13 @@
                     
                     ctx.fillStyle = '#2196F3';
                     ctx.font = '16px Arial';
-                    ctx.fillText('Head tracking active', canvas.width / 2, 180);
+                    const mode = isWindowFixed ? 'Fixed mode' : 'Draggable mode';
+                    ctx.fillText(mode, canvas.width / 2, 180);
+                    
+                    if (isDragging) {
+                        ctx.fillStyle = '#ff9800';
+                        ctx.fillText('Dragging...', canvas.width / 2, 200);
+                    }
                     
                     textMesh.material.map.needsUpdate = true;
                 }
