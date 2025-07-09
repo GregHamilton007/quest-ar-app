@@ -65,7 +65,7 @@
         <button id="stopAR" disabled>Stop AR Session</button>
         <button id="toggleMode">Toggle: Fixed Mode</button>
         <button id="resetPosition">Reset to Default Position</button>
-        <div id="status">Status: Not connected</div>
+        <div id="status">Status: Loading...</div>
     </div>
     
     <div id="container"></div>
@@ -101,7 +101,15 @@
                 alpha: true 
             });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
+            
+            // FIXED: Only enable XR if it's supported
+            if (renderer.xr) {
+                renderer.xr.enabled = true;
+                console.log('WebXR enabled on renderer');
+            } else {
+                console.warn('WebXR not available on renderer');
+            }
+            
             container.appendChild(renderer.domElement);
             
             // Create the fixed window
@@ -115,8 +123,10 @@
             directionalLight.position.set(0, 1, 0);
             scene.add(directionalLight);
             
-            // Set up controllers
-            setupControllers();
+            // Set up controllers only if XR is available
+            if (renderer.xr) {
+                setupControllers();
+            }
         }
         
         function createFixedWindow() {
@@ -184,6 +194,12 @@
         }
         
         function setupControllers() {
+            // FIXED: Check if renderer.xr exists before using it
+            if (!renderer.xr) {
+                console.warn('Cannot setup controllers - WebXR not available');
+                return;
+            }
+            
             // Set up controller 0 (right hand)
             const controller1 = renderer.xr.getController(0);
             controller1.addEventListener('selectstart', onSelectStart);
@@ -310,6 +326,12 @@
             toggleButton.textContent = `Toggle: ${mode} Mode`;
         }
         
+        function resetWindowPosition() {
+            // Reset to default position
+            customFixedOffset.set(0.3, 0.15, -0.5);
+            statusDiv.textContent = 'Status: Window position reset to default';
+        }
+        
         function updateWindowPosition() {
             if (!windowGroup || !camera) return;
             
@@ -340,8 +362,13 @@
         
         async function startARSession() {
             try {
+                // FIXED: Better error handling and checks
                 if (!navigator.xr) {
-                    throw new Error('WebXR not supported');
+                    throw new Error('WebXR not supported in this browser');
+                }
+                
+                if (!renderer.xr) {
+                    throw new Error('WebXR not available on renderer');
                 }
                 
                 const supported = await navigator.xr.isSessionSupported('immersive-ar');
@@ -426,8 +453,20 @@
         // Initialize the scene
         initScene();
         
-        // Check WebXR support on load
-        if (navigator.xr) {
+        // FIXED: Better WebXR support checking
+        function checkWebXRSupport() {
+            if (!navigator.xr) {
+                statusDiv.textContent = 'Status: WebXR not available in this browser';
+                startButton.disabled = true;
+                return;
+            }
+            
+            if (!renderer.xr) {
+                statusDiv.textContent = 'Status: WebXR not available on renderer';
+                startButton.disabled = true;
+                return;
+            }
+            
             navigator.xr.isSessionSupported('immersive-ar').then(supported => {
                 if (supported) {
                     statusDiv.textContent = 'Status: AR ready - checking reference spaces...';
@@ -462,14 +501,18 @@
                         statusDiv.textContent = 'Status: AR ready (limited support)';
                     });
                 } else {
-                    statusDiv.textContent = 'Status: AR not supported';
+                    statusDiv.textContent = 'Status: AR not supported on this device';
                     startButton.disabled = true;
                 }
+            }).catch(error => {
+                console.error('Error checking AR support:', error);
+                statusDiv.textContent = 'Status: Error checking AR support';
+                startButton.disabled = true;
             });
-        } else {
-            statusDiv.textContent = 'Status: WebXR not available';
-            startButton.disabled = true;
         }
+        
+        // Check WebXR support after scene is initialized
+        checkWebXRSupport();
         
         // Update window content periodically
         setInterval(() => {
