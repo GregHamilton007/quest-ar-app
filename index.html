@@ -64,6 +64,7 @@
         <button id="startAR">Start AR Session</button>
         <button id="stopAR" disabled>Stop AR Session</button>
         <button id="toggleMode">Toggle: Fixed Mode</button>
+        <button id="resetPosition">Reset to Default Position</button>
         <div id="status">Status: Not connected</div>
     </div>
     
@@ -78,6 +79,7 @@
         let isDragging = false;
         let dragOffset = new THREE.Vector3();
         let initialWindowPosition = new THREE.Vector3();
+        let customFixedOffset = new THREE.Vector3(0.3, 0.15, -0.5); // Default offset
         let raycaster = new THREE.Raycaster();
         let isWindowFixed = true; // Toggle between fixed and free positioning
         
@@ -85,6 +87,7 @@
         const startButton = document.getElementById('startAR');
         const stopButton = document.getElementById('stopAR');
         const toggleButton = document.getElementById('toggleMode');
+        const resetButton = document.getElementById('resetPosition');
         const statusDiv = document.getElementById('status');
         const container = document.getElementById('container');
         
@@ -277,15 +280,34 @@
         }
         
         function toggleWindowMode() {
+            if (!isWindowFixed) {
+                // Switching FROM draggable TO fixed mode
+                // Calculate the current offset from camera to window position
+                const cameraPosition = new THREE.Vector3();
+                const cameraQuaternion = new THREE.Quaternion();
+                camera.getWorldPosition(cameraPosition);
+                camera.getWorldQuaternion(cameraQuaternion);
+                
+                // Get the current window position relative to camera
+                const currentOffset = new THREE.Vector3();
+                currentOffset.subVectors(windowGroup.position, cameraPosition);
+                
+                // Convert to local camera space (remove camera rotation)
+                const invertedQuaternion = cameraQuaternion.clone().invert();
+                currentOffset.applyQuaternion(invertedQuaternion);
+                
+                // Store this as the new fixed offset
+                customFixedOffset.copy(currentOffset);
+                
+                statusDiv.textContent = 'Status: AR session active (Fixed mode - custom position)';
+            } else {
+                // Switching FROM fixed TO draggable mode
+                statusDiv.textContent = 'Status: AR session active (Draggable mode)';
+            }
+            
             isWindowFixed = !isWindowFixed;
             const mode = isWindowFixed ? 'Fixed' : 'Draggable';
             toggleButton.textContent = `Toggle: ${mode} Mode`;
-            
-            if (isWindowFixed) {
-                statusDiv.textContent = 'Status: AR session active (Fixed mode)';
-            } else {
-                statusDiv.textContent = 'Status: AR session active (Draggable mode)';
-            }
         }
         
         function updateWindowPosition() {
@@ -299,8 +321,8 @@
                 camera.getWorldPosition(cameraPosition);
                 camera.getWorldQuaternion(cameraQuaternion);
                 
-                // Calculate offset for top-right corner (adjusted for better visibility)
-                const offset = new THREE.Vector3(0.3, 0.15, -0.5);
+                // Use the custom offset (either default or user-positioned)
+                const offset = customFixedOffset.clone();
                 offset.applyQuaternion(cameraQuaternion);
                 
                 // Position the window relative to camera
@@ -392,6 +414,7 @@
         startButton.addEventListener('click', startARSession);
         stopButton.addEventListener('click', stopARSession);
         toggleButton.addEventListener('click', toggleWindowMode);
+        resetButton.addEventListener('click', resetWindowPosition);
         
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -480,6 +503,10 @@
                     if (isDragging) {
                         ctx.fillStyle = '#ff9800';
                         ctx.fillText('Dragging...', canvas.width / 2, 200);
+                    } else if (isWindowFixed && (customFixedOffset.x !== 0.3 || customFixedOffset.y !== 0.15 || customFixedOffset.z !== -0.5)) {
+                        ctx.fillStyle = '#9c27b0';
+                        ctx.font = '14px Arial';
+                        ctx.fillText('Custom position', canvas.width / 2, 200);
                     }
                     
                     textMesh.material.map.needsUpdate = true;
