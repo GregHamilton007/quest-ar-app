@@ -164,7 +164,7 @@
             
             // Position the window in the top-right corner of the view
             // We'll update this position in the render loop to follow head movement
-            windowGroup.position.set(0.4, 0.3, -0.6);
+            windowGroup.position.set(0.3, 0.15, -0.5);
             
             scene.add(windowGroup);
         }
@@ -178,8 +178,8 @@
             camera.getWorldPosition(cameraPosition);
             camera.getWorldQuaternion(cameraQuaternion);
             
-            // Calculate offset for top-right corner
-            const offset = new THREE.Vector3(0.4, 0.3, -0.6);
+            // Calculate offset for top-right corner (adjusted for better visibility)
+            const offset = new THREE.Vector3(0.3, 0.15, -0.5);
             offset.applyQuaternion(cameraQuaternion);
             
             // Position the window relative to camera
