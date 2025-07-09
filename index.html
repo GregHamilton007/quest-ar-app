@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quest AR Fixed Window</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        
+        #ui {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            color: white;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+        
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        button:hover {
+            background: #45a049;
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        #container {
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #status {
+            margin-top: 10px;
+            padding: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h3>Quest AR Fixed Window</h3>
+        <button id="startAR">Start AR Session</button>
+        <button id="stopAR" disabled>Stop AR Session</button>
+        <div id="status">Status: Not connected</div>
+    </div>
+    
+    <div id="container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, arSession;
+        let fixedWindow, windowGroup;
+        let isARActive = false;
+        
+        // UI elements
+        const startButton = document.getElementById('startAR');
+        const stopButton = document.getElementById('stopAR');
+        const statusDiv = document.getElementById('status');
+        const container = document.getElementById('container');
+        
+        // Initialize Three.js scene
+        function initScene() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ 
+                antialias: true, 
+                alpha: true 
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            container.appendChild(renderer.domElement);
+            
+            // Create the fixed window
+            createFixedWindow();
+            
+            // Add some lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(0, 1, 0);
+            scene.add(directionalLight);
+        }
+        
+        function createFixedWindow() {
+            // Create a group to hold the window components
+            windowGroup = new THREE.Group();
+            
+            // Create the window panel
+            const windowGeometry = new THREE.PlaneGeometry(0.3, 0.2);
+            const windowMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x333333,
+                transparent: true,
+                opacity: 0.9
+            });
+            fixedWindow = new THREE.Mesh(windowGeometry, windowMaterial);
+            windowGroup.add(fixedWindow);
+            
+            // Create window frame
+            const frameGeometry = new THREE.RingGeometry(0.12, 0.16, 32);
+            const frameMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x666666,
+                transparent: true,
+                opacity: 0.8
+            });
+            const frame = new THREE.Mesh(frameGeometry, frameMaterial);
+            frame.rotation.z = Math.PI / 2;
+            windowGroup.add(frame);
+            
+            // Add some sample content to the window
+            const textGeometry = new THREE.PlaneGeometry(0.25, 0.15);
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            
+            // Draw content on canvas
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '32px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('AR Window', canvas.width / 2, 60);
+            
+            ctx.font = '24px Arial';
+            ctx.fillText('Always in view', canvas.width / 2, 100);
+            
+            ctx.fillStyle = '#4CAF50';
+            ctx.font = '20px Arial';
+            ctx.fillText('Position: Top Right', canvas.width / 2, 140);
+            
+            const canvasTexture = new THREE.CanvasTexture(canvas);
+            const textMaterial = new THREE.MeshLambertMaterial({ 
+                map: canvasTexture,
+                transparent: true
+            });
+            const textMesh = new THREE.Mesh(textGeometry, textMaterial);
+            textMesh.position.z = 0.001; // Slightly in front of the window
+            windowGroup.add(textMesh);
+            
+            // Position the window in the top-right corner of the view
+            // We'll update this position in the render loop to follow head movement
+            windowGroup.position.set(0.4, 0.3, -0.6);
+            
+            scene.add(windowGroup);
+        }
+        
+        function updateWindowPosition() {
+            if (!windowGroup || !camera) return;
+            
+            // Get the camera's world position and rotation
+            const cameraPosition = new THREE.Vector3();
+            const cameraQuaternion = new THREE.Quaternion();
+            camera.getWorldPosition(cameraPosition);
+            camera.getWorldQuaternion(cameraQuaternion);
+            
+            // Calculate offset for top-right corner
+            const offset = new THREE.Vector3(0.4, 0.3, -0.6);
+            offset.applyQuaternion(cameraQuaternion);
+            
+            // Position the window relative to camera
+            windowGroup.position.copy(cameraPosition).add(offset);
+            
+            // Make the window face the camera
+            windowGroup.lookAt(cameraPosition);
+        }
+        
+        async function startARSession() {
+            try {
+                if (!navigator.xr) {
+                    throw new Error('WebXR not supported');
+                }
+                
+                const supported = await navigator.xr.isSessionSupported('immersive-ar');
+                if (!supported) {
+                    throw new Error('AR not supported on this device');
+                }
+                
+                arSession = await navigator.xr.requestSession('immersive-ar', {
+                    requiredFeatures: ['local']
+                });
+                
+                await renderer.xr.setSession(arSession);
+                
+                arSession.addEventListener('end', () => {
+                    isARActive = false;
+                    startButton.disabled = false;
+                    stopButton.disabled = true;
+                    statusDiv.textContent = 'Status: AR session ended';
+                });
+                
+                isARActive = true;
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                statusDiv.textContent = 'Status: AR session active';
+                
+                // Start the render loop
+                renderer.setAnimationLoop(render);
+                
+            } catch (error) {
+                console.error('AR session failed:', error);
+                statusDiv.textContent = `Status: Error - ${error.message}`;
+            }
+        }
+        
+        function stopARSession() {
+            if (arSession) {
+                arSession.end();
+            }
+        }
+        
+        function render() {
+            if (isARActive) {
+                updateWindowPosition();
+            }
+            renderer.render(scene, camera);
+        }
+        
+        // Event listeners
+        startButton.addEventListener('click', startARSession);
+        stopButton.addEventListener('click', stopARSession);
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Initialize the scene
+        initScene();
+        
+        // Check WebXR support on load
+        if (navigator.xr) {
+            navigator.xr.isSessionSupported('immersive-ar').then(supported => {
+                if (supported) {
+                    statusDiv.textContent = 'Status: AR ready';
+                } else {
+                    statusDiv.textContent = 'Status: AR not supported';
+                    startButton.disabled = true;
+                }
+            });
+        } else {
+            statusDiv.textContent = 'Status: WebXR not available';
+            startButton.disabled = true;
+        }
+        
+        // Update window content periodically
+        setInterval(() => {
+            if (isARActive && windowGroup) {
+                const textMesh = windowGroup.children[2]; // The text mesh
+                if (textMesh && textMesh.material.map) {
+                    const canvas = textMesh.material.map.image;
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Clear and redraw with updated time
+                    ctx.fillStyle = '#1a1a1a';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = '32px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('AR Window', canvas.width / 2, 60);
+                    
+                    ctx.font = '24px Arial';
+                    ctx.fillText('Always in view', canvas.width / 2, 100);
+                    
+                    ctx.fillStyle = '#4CAF50';
+                    ctx.font = '20px Arial';
+                    ctx.fillText(`Time: ${new Date().toLocaleTimeString()}`, canvas.width / 2, 140);
+                    
+                    ctx.fillStyle = '#2196F3';
+                    ctx.font = '16px Arial';
+                    ctx.fillText('Head tracking active', canvas.width / 2, 180);
+                    
+                    textMesh.material.map.needsUpdate = true;
+                }
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
