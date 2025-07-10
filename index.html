@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quest AR Fixed Window</title>
+    <title>Quest AR Center Window</title>
     <style>
         body {
             margin: 0;
@@ -60,11 +60,10 @@
 </head>
 <body>
     <div id="ui">
-        <h3>Quest AR Fixed Window</h3>
+        <h3>Quest AR Center Window</h3>
         <button id="startAR">Start AR Session</button>
         <button id="stopAR" disabled>Stop AR Session</button>
-        <button id="toggleMode">Toggle: Fixed Mode</button>
-        <button id="resetPosition">Reset to Default Position</button>
+        <button id="resetPosition">Reset to Center</button>
         <button id="toggleRays">Toggle Controller Rays</button>
         <div id="status">Status: Loading...</div>
     </div>
@@ -79,15 +78,11 @@
         let controllers = [];
         let isDragging = false;
         let dragOffset = new THREE.Vector3();
-        let initialWindowPosition = new THREE.Vector3();
-        let customFixedOffset = new THREE.Vector3(0.3, 0.15, -0.5); // Default offset
         let raycaster = new THREE.Raycaster();
-        let isWindowFixed = true; // Toggle between fixed and free positioning
         
         // UI elements
         const startButton = document.getElementById('startAR');
         const stopButton = document.getElementById('stopAR');
-        const toggleButton = document.getElementById('toggleMode');
         const resetButton = document.getElementById('resetPosition');
         const toggleRaysButton = document.getElementById('toggleRays');
         const statusDiv = document.getElementById('status');
@@ -104,7 +99,6 @@
             });
             renderer.setSize(window.innerWidth, window.innerHeight);
             
-            // FIXED: Only enable XR if it's supported
             if (renderer.xr) {
                 renderer.xr.enabled = true;
                 console.log('WebXR enabled on renderer');
@@ -114,8 +108,8 @@
             
             container.appendChild(renderer.domElement);
             
-            // Create the fixed window
-            createFixedWindow();
+            // Create the center window
+            createCenterWindow();
             
             // Add some lighting
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -131,12 +125,12 @@
             }
         }
         
-        function createFixedWindow() {
+        function createCenterWindow() {
             // Create a group to hold the window components
             windowGroup = new THREE.Group();
             
-            // Create the window panel (removed frame and circle)
-            const windowGeometry = new THREE.PlaneGeometry(0.3, 0.2);
+            // Create the window panel
+            const windowGeometry = new THREE.PlaneGeometry(0.4, 0.25);
             const windowMaterial = new THREE.MeshLambertMaterial({ 
                 color: 0x333333,
                 transparent: true,
@@ -146,10 +140,10 @@
             windowGroup.add(fixedWindow);
             
             // Add some sample content to the window
-            const textGeometry = new THREE.PlaneGeometry(0.25, 0.15);
+            const textGeometry = new THREE.PlaneGeometry(0.35, 0.2);
             const canvas = document.createElement('canvas');
             canvas.width = 512;
-            canvas.height = 256;
+            canvas.height = 320;
             const ctx = canvas.getContext('2d');
             
             // Draw content on canvas
@@ -157,16 +151,20 @@
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
             ctx.fillStyle = '#ffffff';
-            ctx.font = '32px Arial';
+            ctx.font = '36px Arial';
             ctx.textAlign = 'center';
-            ctx.fillText('AR Window', canvas.width / 2, 60);
+            ctx.fillText('AR Window', canvas.width / 2, 70);
             
             ctx.font = '24px Arial';
-            ctx.fillText('Always in view', canvas.width / 2, 100);
+            ctx.fillText('Drag to move', canvas.width / 2, 120);
             
             ctx.fillStyle = '#4CAF50';
             ctx.font = '20px Arial';
-            ctx.fillText('Position: Top Right', canvas.width / 2, 140);
+            ctx.fillText('Started in center', canvas.width / 2, 160);
+            
+            ctx.fillStyle = '#2196F3';
+            ctx.font = '18px Arial';
+            ctx.fillText('Always draggable', canvas.width / 2, 200);
             
             const canvasTexture = new THREE.CanvasTexture(canvas);
             const textMaterial = new THREE.MeshLambertMaterial({ 
@@ -177,15 +175,13 @@
             textMesh.position.z = 0.001; // Slightly in front of the window
             windowGroup.add(textMesh);
             
-            // Position the window in the top-right corner of the view
-            // We'll update this position in the render loop to follow head movement
-            windowGroup.position.set(0.3, 0.15, -0.5);
+            // Position the window in the center, slightly in front of the user
+            windowGroup.position.set(0, 0, -0.6);
             
             scene.add(windowGroup);
         }
         
         function setupControllers() {
-            // FIXED: Check if renderer.xr exists before using it
             if (!renderer.xr) {
                 console.warn('Cannot setup controllers - WebXR not available');
                 return;
@@ -214,20 +210,20 @@
             const material = new THREE.LineBasicMaterial({ 
                 color: 0x00ff00,
                 transparent: true,
-                opacity: 0 // Make rays invisible
+                opacity: 0
             });
             
             controllers.forEach(controller => {
                 const line = new THREE.Line(geometry, material);
                 line.name = 'line';
                 line.scale.z = 5;
-                line.visible = false; // Hide the rays
+                line.visible = false;
                 controller.add(line);
             });
         }
         
         function onSelectStart(event) {
-            if (!windowGroup || isWindowFixed) return;
+            if (!windowGroup) return;
             
             const controller = event.target;
             const intersections = getIntersections(controller);
@@ -236,9 +232,6 @@
                 const intersection = intersections[0];
                 if (intersection.object.parent === windowGroup || intersection.object === fixedWindow) {
                     isDragging = true;
-                    
-                    // Store initial positions
-                    initialWindowPosition.copy(windowGroup.position);
                     
                     // Calculate offset from controller to window center
                     dragOffset.subVectors(windowGroup.position, controller.position);
@@ -291,37 +284,6 @@
             }
         }
         
-        function toggleWindowMode() {
-            if (!isWindowFixed) {
-                // Switching FROM draggable TO fixed mode
-                // Calculate the current offset from camera to window position
-                const cameraPosition = new THREE.Vector3();
-                const cameraQuaternion = new THREE.Quaternion();
-                camera.getWorldPosition(cameraPosition);
-                camera.getWorldQuaternion(cameraQuaternion);
-                
-                // Get the current window position relative to camera
-                const currentOffset = new THREE.Vector3();
-                currentOffset.subVectors(windowGroup.position, cameraPosition);
-                
-                // Convert to local camera space (remove camera rotation)
-                const invertedQuaternion = cameraQuaternion.clone().invert();
-                currentOffset.applyQuaternion(invertedQuaternion);
-                
-                // Store this as the new fixed offset
-                customFixedOffset.copy(currentOffset);
-                
-                statusDiv.textContent = 'Status: AR session active (Fixed mode - custom position)';
-            } else {
-                // Switching FROM fixed TO draggable mode
-                statusDiv.textContent = 'Status: AR session active (Draggable mode)';
-            }
-            
-            isWindowFixed = !isWindowFixed;
-            const mode = isWindowFixed ? 'Fixed' : 'Draggable';
-            toggleButton.textContent = `Toggle: ${mode} Mode`;
-        }
-        
         function toggleControllerRays() {
             controllers.forEach(controller => {
                 const line = controller.getObjectByName('line');
@@ -340,42 +302,24 @@
         }
         
         function resetWindowPosition() {
-            // Reset to default position
-            customFixedOffset.set(0.3, 0.15, -0.5);
-            statusDiv.textContent = 'Status: Window position reset to default';
+            if (windowGroup) {
+                // Reset to center position
+                windowGroup.position.set(0, 0, -0.6);
+                statusDiv.textContent = 'Status: Window reset to center';
+            }
         }
         
-        function updateWindowPosition() {
-            if (!windowGroup || !camera) return;
+        function updateWindowOrientation() {
+            if (!windowGroup || !camera || isDragging) return;
             
-            // Only update position automatically if in fixed mode and not dragging
-            if (isWindowFixed && !isDragging) {
-                // Get the camera's world position and rotation
-                const cameraPosition = new THREE.Vector3();
-                const cameraQuaternion = new THREE.Quaternion();
-                camera.getWorldPosition(cameraPosition);
-                camera.getWorldQuaternion(cameraQuaternion);
-                
-                // Use the custom offset (either default or user-positioned)
-                const offset = customFixedOffset.clone();
-                offset.applyQuaternion(cameraQuaternion);
-                
-                // Position the window relative to camera
-                windowGroup.position.copy(cameraPosition).add(offset);
-                
-                // Make the window face the camera
-                windowGroup.lookAt(cameraPosition);
-            } else if (!isWindowFixed) {
-                // In draggable mode, always make window face the camera
-                const cameraPosition = new THREE.Vector3();
-                camera.getWorldPosition(cameraPosition);
-                windowGroup.lookAt(cameraPosition);
-            }
+            // Always make the window face the camera
+            const cameraPosition = new THREE.Vector3();
+            camera.getWorldPosition(cameraPosition);
+            windowGroup.lookAt(cameraPosition);
         }
         
         async function startARSession() {
             try {
-                // FIXED: Better error handling and checks
                 if (!navigator.xr) {
                     throw new Error('WebXR not supported in this browser');
                 }
@@ -413,8 +357,6 @@
                     }
                 }
                 
-                // Reference space is automatically handled by Three.js WebXR manager
-                
                 arSession.addEventListener('end', () => {
                     isARActive = false;
                     startButton.disabled = false;
@@ -444,7 +386,7 @@
         
         function render() {
             if (isARActive) {
-                updateWindowPosition();
+                updateWindowOrientation();
                 updateDragging();
             }
             renderer.render(scene, camera);
@@ -453,7 +395,6 @@
         // Event listeners
         startButton.addEventListener('click', startARSession);
         stopButton.addEventListener('click', stopARSession);
-        toggleButton.addEventListener('click', toggleWindowMode);
         resetButton.addEventListener('click', resetWindowPosition);
         toggleRaysButton.addEventListener('click', toggleControllerRays);
         
@@ -467,7 +408,6 @@
         // Initialize the scene
         initScene();
         
-        // FIXED: Better WebXR support checking
         function checkWebXRSupport() {
             if (!navigator.xr) {
                 statusDiv.textContent = 'Status: WebXR not available in this browser';
@@ -484,7 +424,6 @@
             navigator.xr.isSessionSupported('immersive-ar').then(supported => {
                 if (supported) {
                     statusDiv.textContent = 'Status: AR ready - checking reference spaces...';
-                    // Check what reference spaces are supported
                     navigator.xr.requestSession('immersive-ar', {
                         optionalFeatures: ['local', 'local-floor', 'bounded-floor', 'viewer']
                     }).then(session => {
@@ -531,7 +470,7 @@
         // Update window content periodically
         setInterval(() => {
             if (isARActive && windowGroup) {
-                const textMesh = windowGroup.children[1]; // The text mesh (was index 2, now index 1)
+                const textMesh = windowGroup.children[1];
                 if (textMesh && textMesh.material.map) {
                     const canvas = textMesh.material.map.image;
                     const ctx = canvas.getContext('2d');
@@ -541,30 +480,32 @@
                     ctx.fillRect(0, 0, canvas.width, canvas.height);
                     
                     ctx.fillStyle = '#ffffff';
-                    ctx.font = '32px Arial';
+                    ctx.font = '36px Arial';
                     ctx.textAlign = 'center';
-                    ctx.fillText('AR Window', canvas.width / 2, 60);
+                    ctx.fillText('AR Window', canvas.width / 2, 70);
                     
                     ctx.font = '24px Arial';
-                    ctx.fillText('Always in view', canvas.width / 2, 100);
+                    ctx.fillText('Drag to move', canvas.width / 2, 120);
                     
                     ctx.fillStyle = '#4CAF50';
                     ctx.font = '20px Arial';
-                    ctx.fillText(`Time: ${new Date().toLocaleTimeString()}`, canvas.width / 2, 140);
-                    
-                    ctx.fillStyle = '#2196F3';
-                    ctx.font = '16px Arial';
-                    const mode = isWindowFixed ? 'Fixed mode' : 'Draggable mode';
-                    ctx.fillText(mode, canvas.width / 2, 180);
+                    ctx.fillText(`Time: ${new Date().toLocaleTimeString()}`, canvas.width / 2, 160);
                     
                     if (isDragging) {
                         ctx.fillStyle = '#ff9800';
+                        ctx.font = '18px Arial';
                         ctx.fillText('Dragging...', canvas.width / 2, 200);
-                    } else if (isWindowFixed && (customFixedOffset.x !== 0.3 || customFixedOffset.y !== 0.15 || customFixedOffset.z !== -0.5)) {
-                        ctx.fillStyle = '#9c27b0';
-                        ctx.font = '14px Arial';
-                        ctx.fillText('Custom position', canvas.width / 2, 200);
+                    } else {
+                        ctx.fillStyle = '#2196F3';
+                        ctx.font = '18px Arial';
+                        ctx.fillText('Always draggable', canvas.width / 2, 200);
                     }
+                    
+                    // Show position info
+                    ctx.fillStyle = '#9c27b0';
+                    ctx.font = '16px Arial';
+                    const pos = windowGroup.position;
+                    ctx.fillText(`Position: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`, canvas.width / 2, 240);
                     
                     textMesh.material.map.needsUpdate = true;
                 }
