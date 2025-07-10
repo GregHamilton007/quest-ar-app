@@ -79,6 +79,7 @@
         let isDragging = false;
         let dragOffset = new THREE.Vector3();
         let raycaster = new THREE.Raycaster();
+        let followOffset = new THREE.Vector3(0, 0, -0.6); // Offset for following head movement
         
         // UI elements
         const startButton = document.getElementById('startAR');
@@ -156,11 +157,11 @@
             ctx.fillText('AR Window', canvas.width / 2, 70);
             
             ctx.font = '24px Arial';
-            ctx.fillText('Drag to move', canvas.width / 2, 120);
+            ctx.fillText('Follows your head', canvas.width / 2, 120);
             
             ctx.fillStyle = '#4CAF50';
             ctx.font = '20px Arial';
-            ctx.fillText('Started in center', canvas.width / 2, 160);
+            ctx.fillText('Drag to reposition', canvas.width / 2, 160);
             
             ctx.fillStyle = '#2196F3';
             ctx.font = '18px Arial';
@@ -233,7 +234,7 @@
                 if (intersection.object.parent === windowGroup || intersection.object === fixedWindow) {
                     isDragging = true;
                     
-                    // Calculate offset from controller to window center
+                    // Calculate offset from controller to window center in world space
                     dragOffset.subVectors(windowGroup.position, controller.position);
                     
                     // Visual feedback
@@ -252,8 +253,25 @@
                 // Reset scale
                 windowGroup.scale.set(1, 1, 1);
                 
+                // Calculate new follow offset based on final position
+                const cameraPosition = new THREE.Vector3();
+                const cameraQuaternion = new THREE.Quaternion();
+                camera.getWorldPosition(cameraPosition);
+                camera.getWorldQuaternion(cameraQuaternion);
+                
+                // Calculate the offset in camera space
+                const currentOffset = new THREE.Vector3();
+                currentOffset.subVectors(windowGroup.position, cameraPosition);
+                
+                // Convert to local camera space
+                const invertedQuaternion = cameraQuaternion.clone().invert();
+                currentOffset.applyQuaternion(invertedQuaternion);
+                
+                // Store this as the new follow offset
+                followOffset.copy(currentOffset);
+                
                 // Update status
-                statusDiv.textContent = 'Status: AR session active';
+                statusDiv.textContent = 'Status: AR session active - window following head';
             }
         }
         
@@ -270,11 +288,24 @@
         function updateDragging() {
             if (!isDragging || !windowGroup) return;
             
-            // Find the controller that's dragging
-            const draggingController = controllers.find(controller => {
-                const intersections = getIntersections(controller);
-                return intersections.length > 0;
-            });
+            // Find the controller that's currently selecting
+            let draggingController = null;
+            for (let controller of controllers) {
+                // Check if this controller is in a select state
+                const gamepad = controller.userData.gamepad;
+                if (gamepad && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
+                    draggingController = controller;
+                    break;
+                }
+            }
+            
+            // If we can't find the active controller, use the first one that intersects
+            if (!draggingController) {
+                draggingController = controllers.find(controller => {
+                    const intersections = getIntersections(controller);
+                    return intersections.length > 0;
+                });
+            }
             
             if (draggingController) {
                 // Move window to controller position plus offset
@@ -303,14 +334,30 @@
         
         function resetWindowPosition() {
             if (windowGroup) {
-                // Reset to center position
+                // Reset to center position and follow offset
+                followOffset.set(0, 0, -0.6);
                 windowGroup.position.set(0, 0, -0.6);
-                statusDiv.textContent = 'Status: Window reset to center';
+                statusDiv.textContent = 'Status: Window reset to center - following head';
             }
         }
         
         function updateWindowOrientation() {
-            if (!windowGroup || !camera || isDragging) return;
+            if (!windowGroup || !camera) return;
+            
+            if (!isDragging) {
+                // When not dragging, make window follow head movement
+                const cameraPosition = new THREE.Vector3();
+                const cameraQuaternion = new THREE.Quaternion();
+                camera.getWorldPosition(cameraPosition);
+                camera.getWorldQuaternion(cameraQuaternion);
+                
+                // Apply the follow offset in camera space
+                const offset = followOffset.clone();
+                offset.applyQuaternion(cameraQuaternion);
+                
+                // Position the window relative to camera
+                windowGroup.position.copy(cameraPosition).add(offset);
+            }
             
             // Always make the window face the camera
             const cameraPosition = new THREE.Vector3();
@@ -367,7 +414,7 @@
                 isARActive = true;
                 startButton.disabled = true;
                 stopButton.disabled = false;
-                statusDiv.textContent = 'Status: AR session active';
+                statusDiv.textContent = 'Status: AR session active - window following head';
                 
                 // Start the render loop
                 renderer.setAnimationLoop(render);
@@ -498,7 +545,7 @@
                     } else {
                         ctx.fillStyle = '#2196F3';
                         ctx.font = '18px Arial';
-                        ctx.fillText('Always draggable', canvas.width / 2, 200);
+                        ctx.fillText('Following head movement', canvas.width / 2, 200);
                     }
                     
                     // Show position info
