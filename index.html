@@ -77,9 +77,17 @@
         let isARActive = false;
         let controllers = [];
         let isDragging = false;
+        let isScaling = false;
         let dragOffset = new THREE.Vector3();
         let raycaster = new THREE.Raycaster();
         let followOffset = new THREE.Vector3(0, 0, -0.6); // Offset for following head movement
+        let windowScale = 1.0;
+        let initialScale = 1.0;
+        let scaleHandle;
+        
+        // Depth constraints
+        const MIN_DEPTH = 0.3;
+        const MAX_DEPTH = 2.0;
         
         // UI elements
         const startButton = document.getElementById('startAR');
@@ -140,6 +148,18 @@
             fixedWindow = new THREE.Mesh(windowGeometry, windowMaterial);
             windowGroup.add(fixedWindow);
             
+            // Create scale handle (small cube in bottom-right corner)
+            const handleGeometry = new THREE.BoxGeometry(0.03, 0.03, 0.03);
+            const handleMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x4CAF50,
+                transparent: true,
+                opacity: 0.8
+            });
+            scaleHandle = new THREE.Mesh(handleGeometry, handleMaterial);
+            scaleHandle.position.set(0.185, -0.11, 0.005); // Bottom-right corner
+            scaleHandle.name = 'scaleHandle';
+            windowGroup.add(scaleHandle);
+            
             // Add some sample content to the window
             const textGeometry = new THREE.PlaneGeometry(0.35, 0.2);
             const canvas = document.createElement('canvas');
@@ -165,7 +185,7 @@
             
             ctx.fillStyle = '#2196F3';
             ctx.font = '18px Arial';
-            ctx.fillText('Always draggable', canvas.width / 2, 200);
+            ctx.fillText('Green corner = scale', canvas.width / 2, 200);
             
             const canvasTexture = new THREE.CanvasTexture(canvas);
             const textMaterial = new THREE.MeshLambertMaterial({ 
@@ -174,6 +194,7 @@
             });
             const textMesh = new THREE.Mesh(textGeometry, textMaterial);
             textMesh.position.z = 0.001; // Slightly in front of the window
+            textMesh.name = 'textMesh';
             windowGroup.add(textMesh);
             
             // Position the window in the center, slightly in front of the user
@@ -231,27 +252,53 @@
             
             if (intersections.length > 0) {
                 const intersection = intersections[0];
-                if (intersection.object.parent === windowGroup || intersection.object === fixedWindow) {
+                const hitObject = intersection.object;
+                
+                // Check if we hit the scale handle
+                if (hitObject.name === 'scaleHandle') {
+                    isScaling = true;
+                    initialScale = windowScale;
+                    
+                    // Visual feedback for scaling
+                    scaleHandle.material.color.setHex(0xff9800);
+                    windowGroup.scale.set(1.05, 1.05, 1.05);
+                    
+                    statusDiv.textContent = 'Status: Scaling window';
+                    return;
+                }
+                
+                // Check if we hit the window (but not the scale handle)
+                if (hitObject.parent === windowGroup || hitObject === fixedWindow) {
                     isDragging = true;
                     
                     // Calculate offset from controller to window center in world space
                     dragOffset.subVectors(windowGroup.position, controller.position);
                     
-                    // Visual feedback
+                    // Visual feedback for dragging
                     windowGroup.scale.set(1.1, 1.1, 1.1);
                     
-                    // Update status
                     statusDiv.textContent = 'Status: Dragging window';
                 }
             }
         }
         
         function onSelectEnd(event) {
+            if (isScaling) {
+                isScaling = false;
+                
+                // Reset scale handle color and window scale
+                scaleHandle.material.color.setHex(0x4CAF50);
+                applyWindowScale();
+                
+                statusDiv.textContent = 'Status: AR session active - window following head';
+                return;
+            }
+            
             if (isDragging) {
                 isDragging = false;
                 
                 // Reset scale
-                windowGroup.scale.set(1, 1, 1);
+                applyWindowScale();
                 
                 // Calculate new follow offset based on final position
                 const cameraPosition = new THREE.Vector3();
@@ -282,36 +329,83 @@
             raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
             raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
             
-            return raycaster.intersectObjects([fixedWindow], true);
+            // Include scale handle in intersection tests
+            const targets = [fixedWindow, scaleHandle];
+            return raycaster.intersectObjects(targets, true);
         }
         
         function updateDragging() {
-            if (!isDragging || !windowGroup) return;
+            if (!windowGroup) return;
             
-            // Find the controller that's currently selecting
-            let draggingController = null;
-            for (let controller of controllers) {
-                // Check if this controller is in a select state
-                const gamepad = controller.userData.gamepad;
-                if (gamepad && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
-                    draggingController = controller;
-                    break;
+            if (isScaling) {
+                // Handle scaling
+                let scalingController = null;
+                for (let controller of controllers) {
+                    const gamepad = controller.userData.gamepad;
+                    if (gamepad && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
+                        scalingController = controller;
+                        break;
+                    }
                 }
+                
+                if (scalingController) {
+                    // Calculate distance from controller to window center
+                    const distance = scalingController.position.distanceTo(windowGroup.position);
+                    
+                    // Scale based on distance (closer = smaller, farther = larger)
+                    const baseDistance = 0.3;
+                    const scaleFactor = Math.max(0.5, Math.min(2.0, distance / baseDistance));
+                    windowScale = initialScale * scaleFactor;
+                    
+                    // Update scale handle position based on new scale
+                    scaleHandle.position.set(0.185 * windowScale, -0.11 * windowScale, 0.005);
+                }
+                return;
             }
             
-            // If we can't find the active controller, use the first one that intersects
-            if (!draggingController) {
-                draggingController = controllers.find(controller => {
-                    const intersections = getIntersections(controller);
-                    return intersections.length > 0;
-                });
-            }
-            
-            if (draggingController) {
-                // Move window to controller position plus offset
-                const newPosition = new THREE.Vector3();
-                newPosition.addVectors(draggingController.position, dragOffset);
-                windowGroup.position.copy(newPosition);
+            if (isDragging) {
+                // Handle dragging with depth constraints
+                let draggingController = null;
+                for (let controller of controllers) {
+                    const gamepad = controller.userData.gamepad;
+                    if (gamepad && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
+                        draggingController = controller;
+                        break;
+                    }
+                }
+                
+                if (!draggingController) {
+                    draggingController = controllers.find(controller => {
+                        const intersections = getIntersections(controller);
+                        return intersections.length > 0;
+                    });
+                }
+                
+                if (draggingController) {
+                    // Calculate new position
+                    const newPosition = new THREE.Vector3();
+                    newPosition.addVectors(draggingController.position, dragOffset);
+                    
+                    // Get camera position for depth constraint
+                    const cameraPosition = new THREE.Vector3();
+                    camera.getWorldPosition(cameraPosition);
+                    
+                    // Calculate distance from camera
+                    const distance = newPosition.distanceTo(cameraPosition);
+                    
+                    // Apply depth constraints
+                    if (distance < MIN_DEPTH) {
+                        // Push away from camera
+                        const direction = new THREE.Vector3().subVectors(newPosition, cameraPosition).normalize();
+                        newPosition.copy(cameraPosition).add(direction.multiplyScalar(MIN_DEPTH));
+                    } else if (distance > MAX_DEPTH) {
+                        // Pull closer to camera
+                        const direction = new THREE.Vector3().subVectors(newPosition, cameraPosition).normalize();
+                        newPosition.copy(cameraPosition).add(direction.multiplyScalar(MAX_DEPTH));
+                    }
+                    
+                    windowGroup.position.copy(newPosition);
+                }
             }
         }
         
@@ -332,11 +426,22 @@
             statusDiv.textContent = `Status: Controller rays ${anyVisible ? 'visible' : 'hidden'}`;
         }
         
+        function applyWindowScale() {
+            // Apply the current scale to the window group
+            windowGroup.scale.set(windowScale, windowScale, windowScale);
+        }
+        
         function resetWindowPosition() {
             if (windowGroup) {
-                // Reset to center position and follow offset
+                // Reset to center position, follow offset, and scale
                 followOffset.set(0, 0, -0.6);
                 windowGroup.position.set(0, 0, -0.6);
+                windowScale = 1.0;
+                applyWindowScale();
+                
+                // Reset scale handle position
+                scaleHandle.position.set(0.185, -0.11, 0.005);
+                
                 statusDiv.textContent = 'Status: Window reset to center - following head';
             }
         }
@@ -344,8 +449,8 @@
         function updateWindowOrientation() {
             if (!windowGroup || !camera) return;
             
-            if (!isDragging) {
-                // When not dragging, make window follow head movement
+            if (!isDragging && !isScaling) {
+                // When not dragging or scaling, make window follow head movement
                 const cameraPosition = new THREE.Vector3();
                 const cameraQuaternion = new THREE.Quaternion();
                 camera.getWorldPosition(cameraPosition);
@@ -363,6 +468,11 @@
             const cameraPosition = new THREE.Vector3();
             camera.getWorldPosition(cameraPosition);
             windowGroup.lookAt(cameraPosition);
+            
+            // Apply current scale
+            if (!isDragging && !isScaling) {
+                applyWindowScale();
+            }
         }
         
         async function startARSession() {
@@ -541,18 +651,26 @@
                     if (isDragging) {
                         ctx.fillStyle = '#ff9800';
                         ctx.font = '18px Arial';
-                        ctx.fillText('Dragging...', canvas.width / 2, 200);
+                        ctx.fillText('Dragging...', canvas.width / 2, 240);
+                    } else if (isScaling) {
+                        ctx.fillStyle = '#ff9800';
+                        ctx.font = '18px Arial';
+                        ctx.fillText('Scaling...', canvas.width / 2, 240);
                     } else {
                         ctx.fillStyle = '#2196F3';
                         ctx.font = '18px Arial';
-                        ctx.fillText('Following head movement', canvas.width / 2, 200);
+                        ctx.fillText('Following head movement', canvas.width / 2, 240);
                     }
                     
-                    // Show position info
+                    // Show scale info
                     ctx.fillStyle = '#9c27b0';
                     ctx.font = '16px Arial';
+                    ctx.fillText(`Scale: ${windowScale.toFixed(2)}x`, canvas.width / 2, 270);
+                    
+                    // Show position info
                     const pos = windowGroup.position;
-                    ctx.fillText(`Position: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`, canvas.width / 2, 240);
+                    const distance = pos.length();
+                    ctx.fillText(`Distance: ${distance.toFixed(2)}m`, canvas.width / 2, 290);
                     
                     textMesh.material.map.needsUpdate = true;
                 }
