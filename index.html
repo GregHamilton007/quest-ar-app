@@ -221,7 +221,10 @@
                 console.log('Video started playing.');
                 playButtonOverlay.style.display = 'none'; // Hide play button overlay
                 instructionsDiv.textContent = "Video playing. Use 'W'/'S' or swipe up/down to move. Click 'Start AR Session' to enter AR.";
-                startARButton.disabled = false; // Enable AR start button
+                // Only enable AR start button if WebXR is supported
+                if (navigator.xr && navigator.xr.isSessionSupported('immersive-ar')) {
+                    startARButton.disabled = false;
+                }
                 statusDiv.textContent = "Video playing.";
 
             } catch (error) {
@@ -285,7 +288,8 @@
             if (!navigator.xr) {
                 console.warn('WebXR not available in this browser');
                 statusDiv.textContent = 'WebXR not available in this browser.';
-                playButton.disabled = true;
+                playButton.disabled = false; // Video can still be played
+                startARButton.disabled = true; // AR button explicitly disabled
                 return;
             }
 
@@ -293,16 +297,19 @@
                 const supported = await navigator.xr.isSessionSupported('immersive-ar');
                 if (supported) {
                     statusDiv.textContent = 'AR (immersive-ar) supported.';
-                    playButton.disabled = false; // Enable play button if AR is supported
+                    playButton.disabled = false; // Video can be played
+                    // startARButton will be enabled after video plays
                 } else {
                     console.warn('AR (immersive-ar) not supported on this device');
                     statusDiv.textContent = 'AR (immersive-ar) not supported on this device.';
-                    playButton.disabled = true; // Disable play button if AR is not supported
+                    playButton.disabled = false; // Video can still be played
+                    startARButton.disabled = true; // AR button explicitly disabled
                 }
             } catch (error) {
                 console.error('Error checking AR support:', error);
                 statusDiv.textContent = `Error checking AR support: ${error.message}`;
-                playButton.disabled = true; // Disable play button on error
+                playButton.disabled = false; // Video can still be played
+                startARButton.disabled = true; // AR button explicitly disabled
             }
         }
 
