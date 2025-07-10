@@ -65,6 +65,7 @@
         <button id="stopAR" disabled>Stop AR Session</button>
         <button id="toggleMode">Toggle: Fixed Mode</button>
         <button id="resetPosition">Reset to Default Position</button>
+        <button id="toggleRays">Toggle Controller Rays</button>
         <div id="status">Status: Loading...</div>
     </div>
     
@@ -88,6 +89,7 @@
         const stopButton = document.getElementById('stopAR');
         const toggleButton = document.getElementById('toggleMode');
         const resetButton = document.getElementById('resetPosition');
+        const toggleRaysButton = document.getElementById('toggleRays');
         const statusDiv = document.getElementById('status');
         const container = document.getElementById('container');
         
@@ -133,7 +135,7 @@
             // Create a group to hold the window components
             windowGroup = new THREE.Group();
             
-            // Create the window panel
+            // Create the window panel (removed frame and circle)
             const windowGeometry = new THREE.PlaneGeometry(0.3, 0.2);
             const windowMaterial = new THREE.MeshLambertMaterial({ 
                 color: 0x333333,
@@ -142,17 +144,6 @@
             });
             fixedWindow = new THREE.Mesh(windowGeometry, windowMaterial);
             windowGroup.add(fixedWindow);
-            
-            // Create window frame
-            const frameGeometry = new THREE.RingGeometry(0.12, 0.16, 32);
-            const frameMaterial = new THREE.MeshLambertMaterial({ 
-                color: 0x666666,
-                transparent: true,
-                opacity: 0.8
-            });
-            const frame = new THREE.Mesh(frameGeometry, frameMaterial);
-            frame.rotation.z = Math.PI / 2;
-            windowGroup.add(frame);
             
             // Add some sample content to the window
             const textGeometry = new THREE.PlaneGeometry(0.25, 0.15);
@@ -214,18 +205,23 @@
             
             controllers = [controller1, controller2];
             
-            // Add visual rays for controllers
+            // Add visual rays for controllers (hidden by default)
             const geometry = new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(0, 0, 0),
                 new THREE.Vector3(0, 0, -1)
             ]);
             
-            const material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+            const material = new THREE.LineBasicMaterial({ 
+                color: 0x00ff00,
+                transparent: true,
+                opacity: 0 // Make rays invisible
+            });
             
             controllers.forEach(controller => {
                 const line = new THREE.Line(geometry, material);
                 line.name = 'line';
                 line.scale.z = 5;
+                line.visible = false; // Hide the rays
                 controller.add(line);
             });
         }
@@ -324,6 +320,23 @@
             isWindowFixed = !isWindowFixed;
             const mode = isWindowFixed ? 'Fixed' : 'Draggable';
             toggleButton.textContent = `Toggle: ${mode} Mode`;
+        }
+        
+        function toggleControllerRays() {
+            controllers.forEach(controller => {
+                const line = controller.getObjectByName('line');
+                if (line) {
+                    line.visible = !line.visible;
+                    line.material.opacity = line.visible ? 1 : 0;
+                }
+            });
+            
+            const anyVisible = controllers.some(controller => {
+                const line = controller.getObjectByName('line');
+                return line && line.visible;
+            });
+            
+            statusDiv.textContent = `Status: Controller rays ${anyVisible ? 'visible' : 'hidden'}`;
         }
         
         function resetWindowPosition() {
@@ -442,6 +455,7 @@
         stopButton.addEventListener('click', stopARSession);
         toggleButton.addEventListener('click', toggleWindowMode);
         resetButton.addEventListener('click', resetWindowPosition);
+        toggleRaysButton.addEventListener('click', toggleControllerRays);
         
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -517,7 +531,7 @@
         // Update window content periodically
         setInterval(() => {
             if (isARActive && windowGroup) {
-                const textMesh = windowGroup.children[2]; // The text mesh
+                const textMesh = windowGroup.children[1]; // The text mesh (was index 2, now index 1)
                 if (textMesh && textMesh.material.map) {
                     const canvas = textMesh.material.map.image;
                     const ctx = canvas.getContext('2d');
