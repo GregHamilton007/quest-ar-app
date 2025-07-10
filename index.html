@@ -3,679 +3,278 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quest AR Center Window</title>
+    <title>Quest AR Video Window</title>
     <style>
         body {
             margin: 0;
             padding: 0;
             background-color: #000;
             font-family: Arial, sans-serif;
-            overflow: hidden;
+            overflow: hidden; /* Prevent scrollbars */
         }
-        
-        #ui {
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            z-index: 1000;
-            color: white;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 15px;
-            border-radius: 10px;
-            font-size: 14px;
-        }
-        
-        button {
-            background: #4CAF50;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            margin: 5px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        
-        button:hover {
-            background: #45a049;
-        }
-        
-        button:disabled {
-            background: #666;
-            cursor: not-allowed;
-        }
-        
         #container {
             width: 100vw;
             height: 100vh;
+            display: block; /* Ensure canvas fills the container */
         }
-        
-        #status {
-            margin-top: 10px;
-            padding: 5px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 5px;
+        #playButtonOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.75); /* Semi-transparent black overlay */
+            z-index: 100; /* Ensure it's above the canvas */
+        }
+        #playButton {
+            padding: 20px 40px;
+            font-size: 24px;
+            font-weight: bold;
+            color: white;
+            background-color: #4CAF50; /* Green button */
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            transition: background-color 0.3s ease, transform 0.2s ease;
+        }
+        #playButton:hover {
+            background-color: #45a049;
+            transform: scale(1.05);
+        }
+        #playButton:active {
+            transform: scale(0.98);
+        }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            text-align: center;
+            z-index: 99; /* Below play button, above canvas */
+            display: none; /* Hidden by default, shown after play */
         }
     </style>
 </head>
 <body>
-    <div id="ui">
-        <h3>Quest AR Center Window</h3>
-        <button id="startAR">Start AR Session</button>
-        <button id="stopAR" disabled>Stop AR Session</button>
-        <button id="resetPosition">Reset to Center</button>
-        <button id="toggleRays">Toggle Controller Rays</button>
-        <div id="status">Status: Loading...</div>
-    </div>
-    
     <div id="container"></div>
+
+    <div id="playButtonOverlay">
+        <button id="playButton">Play Video</button>
+    </div>
+
+    <div id="instructions">
+        Use 'W' (forward) and 'S' (backward) keys to move.
+        <br/>
+        On touch devices, swipe up/down to move.
+    </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
         let scene, camera, renderer, arSession;
-        let fixedWindow, windowGroup;
-        let isARActive = false;
-        let controllers = [];
-        let isDragging = false;
-        let isScaling = false;
-        let dragOffset = new THREE.Vector3();
-        let raycaster = new THREE.Raycaster();
-        let followOffset = new THREE.Vector3(0, 0, -0.6); // Offset for following head movement
-        let windowScale = 1.0;
-        let initialScale = 1.0;
-        let scaleHandle;
-        
-        // Depth constraints
-        const MIN_DEPTH = 0.3;
-        const MAX_DEPTH = 2.0;
-        
-        // UI elements
-        const startButton = document.getElementById('startAR');
-        const stopButton = document.getElementById('stopAR');
-        const resetButton = document.getElementById('resetPosition');
-        const toggleRaysButton = document.getElementById('toggleRays');
-        const statusDiv = document.getElementById('status');
-        const container = document.getElementById('container');
-        
+        let videoElement, videoTexture, videoScreen;
+        let playButtonOverlay, playButton, instructionsDiv;
+
+        // Camera movement speed
+        const moveSpeed = 0.05;
+
         // Initialize Three.js scene
         function initScene() {
+            // Scene setup
             scene = new THREE.Scene();
+
+            // Camera setup
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            
-            renderer = new THREE.WebGLRenderer({ 
-                antialias: true, 
-                alpha: true 
+            camera.position.z = 5; // Initial global position of the camera
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: true // Enable alpha for AR passthrough
             });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            
-            if (renderer.xr) {
-                renderer.xr.enabled = true;
-                console.log('WebXR enabled on renderer');
-            } else {
-                console.warn('WebXR not available on renderer');
-            }
-            
-            container.appendChild(renderer.domElement);
-            
-            // Create the center window
-            createCenterWindow();
-            
-            // Add some lighting
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-            scene.add(ambientLight);
-            
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            directionalLight.position.set(0, 1, 0);
-            scene.add(directionalLight);
-            
-            // Set up controllers only if XR is available
-            if (renderer.xr) {
-                setupControllers();
-            }
+            renderer.setClearColor(0x000000, 0); // Transparent background for AR
+            renderer.xr.enabled = true; // Enable WebXR on the renderer
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // Create the video screen
+            createVideoScreen();
+
+            // Store references to UI elements
+            playButtonOverlay = document.getElementById('playButtonOverlay');
+            playButton = document.getElementById('playButton');
+            instructionsDiv = document.getElementById('instructions');
+
+            // Add event listener for the play button
+            playButton.addEventListener('click', handlePlayVideo);
+
+            // Set up WebXR session (without starting it immediately)
+            checkWebXRSupport();
+
+            // Add keyboard and touch controls for camera movement
+            setupMovementControls();
         }
-        
-        function createCenterWindow() {
-            // Create a group to hold the window components
-            windowGroup = new THREE.Group();
-            
-            // Create the window panel
-            const windowGeometry = new THREE.PlaneGeometry(0.4, 0.25);
-            const windowMaterial = new THREE.MeshLambertMaterial({ 
-                color: 0x333333,
-                transparent: true,
-                opacity: 0.9
-            });
-            fixedWindow = new THREE.Mesh(windowGeometry, windowMaterial);
-            windowGroup.add(fixedWindow);
-            
-            // Create scale handle (small cube in bottom-right corner)
-            const handleGeometry = new THREE.BoxGeometry(0.03, 0.03, 0.03);
-            const handleMaterial = new THREE.MeshLambertMaterial({ 
-                color: 0x4CAF50,
-                transparent: true,
-                opacity: 0.8
-            });
-            scaleHandle = new THREE.Mesh(handleGeometry, handleMaterial);
-            scaleHandle.position.set(0.185, -0.11, 0.005); // Bottom-right corner
-            scaleHandle.name = 'scaleHandle';
-            windowGroup.add(scaleHandle);
-            
-            // Add some sample content to the window
-            const textGeometry = new THREE.PlaneGeometry(0.35, 0.2);
-            const canvas = document.createElement('canvas');
-            canvas.width = 512;
-            canvas.height = 320;
-            const ctx = canvas.getContext('2d');
-            
-            // Draw content on canvas
-            ctx.fillStyle = '#1a1a1a';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '36px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('AR Window', canvas.width / 2, 70);
-            
-            ctx.font = '24px Arial';
-            ctx.fillText('Follows your head', canvas.width / 2, 120);
-            
-            ctx.fillStyle = '#4CAF50';
-            ctx.font = '20px Arial';
-            ctx.fillText('Drag to reposition', canvas.width / 2, 160);
-            
-            ctx.fillStyle = '#2196F3';
-            ctx.font = '18px Arial';
-            ctx.fillText('Green corner = scale', canvas.width / 2, 200);
-            
-            const canvasTexture = new THREE.CanvasTexture(canvas);
-            const textMaterial = new THREE.MeshLambertMaterial({ 
-                map: canvasTexture,
-                transparent: true
-            });
-            const textMesh = new THREE.Mesh(textGeometry, textMaterial);
-            textMesh.position.z = 0.001; // Slightly in front of the window
-            textMesh.name = 'textMesh';
-            windowGroup.add(textMesh);
-            
-            // Position the window in the center, slightly in front of the user
-            windowGroup.position.set(0, 0, -0.6);
-            
-            scene.add(windowGroup);
+
+        // Creates the 3D video screen and attaches it to the camera
+        function createVideoScreen() {
+            // 1. Video Element Setup
+            videoElement = document.createElement('video');
+            videoElement.src = 'https://www.learningcontainer.com/wp-content/uploads/2020/05/sample-mp4-file.mp4'; // Sample video URL
+            videoElement.loop = true;
+            videoElement.muted = true; // Muted by default for autoplay
+            videoElement.playsInline = true; // Required for autoplay on iOS
+
+            // 2. Video Texture and Material for the Screen
+            videoTexture = new THREE.VideoTexture(videoElement);
+            videoTexture.minFilter = THREE.LinearFilter;
+            videoTexture.magFilter = THREE.LinearFilter;
+            videoTexture.format = THREE.RGBAFormat;
+
+            const screenMaterial = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide });
+
+            // 3. Screen Geometry (Plane) - Adjust size as needed
+            const screenWidth = 2.0; // Example width in world units
+            const screenHeight = screenWidth / (16 / 9); // Assuming 16:9 aspect ratio
+
+            const screenGeometry = new THREE.PlaneGeometry(screenWidth, screenHeight);
+
+            // 4. Create the Screen Mesh
+            videoScreen = new THREE.Mesh(screenGeometry, screenMaterial);
+
+            // 5. Position the screen in front of the camera, relative to its local space
+            // This makes it "stationary" relative to the user's view
+            videoScreen.position.set(0, 0, -3); // 3 units in front of the camera
+
+            // 6. Add the screen as a child of the camera
+            // This ensures the screen always stays centered in the user's view
+            camera.add(videoScreen);
+            scene.add(camera); // Add camera (which now contains the screen) to the scene
         }
-        
-        function setupControllers() {
-            if (!renderer.xr) {
-                console.warn('Cannot setup controllers - WebXR not available');
-                return;
-            }
-            
-            // Set up controller 0 (right hand)
-            const controller1 = renderer.xr.getController(0);
-            controller1.addEventListener('selectstart', onSelectStart);
-            controller1.addEventListener('selectend', onSelectEnd);
-            scene.add(controller1);
-            
-            // Set up controller 1 (left hand)
-            const controller2 = renderer.xr.getController(1);
-            controller2.addEventListener('selectstart', onSelectStart);
-            controller2.addEventListener('selectend', onSelectEnd);
-            scene.add(controller2);
-            
-            controllers = [controller1, controller2];
-            
-            // Add visual rays for controllers (hidden by default)
-            const geometry = new THREE.BufferGeometry().setFromPoints([
-                new THREE.Vector3(0, 0, 0),
-                new THREE.Vector3(0, 0, -1)
-            ]);
-            
-            const material = new THREE.LineBasicMaterial({ 
-                color: 0x00ff00,
-                transparent: true,
-                opacity: 0
-            });
-            
-            controllers.forEach(controller => {
-                const line = new THREE.Line(geometry, material);
-                line.name = 'line';
-                line.scale.z = 5;
-                line.visible = false;
-                controller.add(line);
-            });
-        }
-        
-        function onSelectStart(event) {
-            if (!windowGroup) return;
-            
-            const controller = event.target;
-            const intersections = getIntersections(controller);
-            
-            if (intersections.length > 0) {
-                const intersection = intersections[0];
-                const hitObject = intersection.object;
-                
-                // Check if we hit the scale handle
-                if (hitObject.name === 'scaleHandle') {
-                    isScaling = true;
-                    initialScale = windowScale;
-                    
-                    // Visual feedback for scaling
-                    scaleHandle.material.color.setHex(0xff9800);
-                    windowGroup.scale.set(1.05, 1.05, 1.05);
-                    
-                    statusDiv.textContent = 'Status: Scaling window';
-                    return;
-                }
-                
-                // Check if we hit the window (but not the scale handle)
-                if (hitObject.parent === windowGroup || hitObject === fixedWindow) {
-                    isDragging = true;
-                    
-                    // Calculate offset from controller to window center in world space
-                    dragOffset.subVectors(windowGroup.position, controller.position);
-                    
-                    // Visual feedback for dragging
-                    windowGroup.scale.set(1.1, 1.1, 1.1);
-                    
-                    statusDiv.textContent = 'Status: Dragging window';
-                }
+
+        // Handles starting video playback
+        function handlePlayVideo() {
+            if (videoElement) {
+                videoElement.play().then(() => {
+                    // Hide the play button overlay after successful playback
+                    playButtonOverlay.style.display = 'none';
+                    instructionsDiv.style.display = 'block'; // Show instructions
+                    console.log('Video started playing.');
+                }).catch(error => {
+                    console.error("Error playing video:", error);
+                    alert("Video autoplay blocked. Please allow media playback in your browser settings or interact with the page.");
+                });
             }
         }
-        
-        function onSelectEnd(event) {
-            if (isScaling) {
-                isScaling = false;
-                
-                // Reset scale handle color and window scale
-                scaleHandle.material.color.setHex(0x4CAF50);
-                applyWindowScale();
-                
-                statusDiv.textContent = 'Status: AR session active - window following head';
-                return;
-            }
-            
-            if (isDragging) {
-                isDragging = false;
-                
-                // Reset scale
-                applyWindowScale();
-                
-                // Calculate new follow offset based on final position
-                const cameraPosition = new THREE.Vector3();
-                const cameraQuaternion = new THREE.Quaternion();
-                camera.getWorldPosition(cameraPosition);
-                camera.getWorldQuaternion(cameraQuaternion);
-                
-                // Calculate the offset in camera space
-                const currentOffset = new THREE.Vector3();
-                currentOffset.subVectors(windowGroup.position, cameraPosition);
-                
-                // Convert to local camera space
-                const invertedQuaternion = cameraQuaternion.clone().invert();
-                currentOffset.applyQuaternion(invertedQuaternion);
-                
-                // Store this as the new follow offset
-                followOffset.copy(currentOffset);
-                
-                // Update status
-                statusDiv.textContent = 'Status: AR session active - window following head';
-            }
-        }
-        
-        function getIntersections(controller) {
-            const tempMatrix = new THREE.Matrix4();
-            tempMatrix.identity().extractRotation(controller.matrixWorld);
-            
-            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-            
-            // Include scale handle in intersection tests
-            const targets = [fixedWindow, scaleHandle];
-            return raycaster.intersectObjects(targets, true);
-        }
-        
-        function updateDragging() {
-            if (!windowGroup) return;
-            
-            if (isScaling) {
-                // Handle scaling
-                let scalingController = null;
-                for (let controller of controllers) {
-                    const gamepad = controller.userData.gamepad;
-                    if (gamepad && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
-                        scalingController = controller;
+
+        // Sets up keyboard and touch controls for camera movement
+        function setupMovementControls() {
+            // Keyboard controls
+            const handleKeyDown = (event) => {
+                switch (event.key) {
+                    case 'w': // Move forward
+                        camera.position.z -= moveSpeed;
                         break;
+                    case 's': // Move backward
+                        camera.position.z += moveSpeed;
+                        break;
+                    default:
+                        break;
+                }
+            };
+            window.addEventListener('keydown', handleKeyDown);
+
+            // Touch controls (simple swipe up/down for forward/backward)
+            let touchStartY = 0;
+            const handleTouchStart = (event) => {
+                if (event.touches.length > 0) {
+                    touchStartY = event.touches[0].clientY;
+                }
+            };
+
+            const handleTouchEnd = (event) => {
+                if (event.changedTouches.length > 0) {
+                    const touchEndY = event.changedTouches[0].clientY;
+                    const deltaY = touchEndY - touchStartY;
+
+                    if (deltaY < -50) { // Swipe up (move forward)
+                        camera.position.z -= moveSpeed * 10; // Faster for touch
+                    } else if (deltaY > 50) { // Swipe down (move backward)
+                        camera.position.z += moveSpeed * 10; // Faster for touch
                     }
                 }
-                
-                if (scalingController) {
-                    // Calculate distance from controller to window center
-                    const distance = scalingController.position.distanceTo(windowGroup.position);
-                    
-                    // Scale based on distance (closer = smaller, farther = larger)
-                    const baseDistance = 0.3;
-                    const scaleFactor = Math.max(0.5, Math.min(2.0, distance / baseDistance));
-                    windowScale = initialScale * scaleFactor;
-                    
-                    // Update scale handle position based on new scale
-                    scaleHandle.position.set(0.185 * windowScale, -0.11 * windowScale, 0.005);
-                }
+            };
+
+            window.addEventListener('touchstart', handleTouchStart);
+            window.addEventListener('touchend', handleTouchEnd);
+        }
+
+        // Checks WebXR support and updates UI status
+        async function checkWebXRSupport() {
+            if (!navigator.xr) {
+                console.warn('WebXR not available in this browser');
+                // You might want to update a status message on the page here
                 return;
             }
-            
-            if (isDragging) {
-                // Handle dragging with depth constraints
-                let draggingController = null;
-                for (let controller of controllers) {
-                    const gamepad = controller.userData.gamepad;
-                    if (gamepad && gamepad.buttons && gamepad.buttons[0] && gamepad.buttons[0].pressed) {
-                        draggingController = controller;
-                        break;
-                    }
+
+            try {
+                const supported = await navigator.xr.isSessionSupported('immersive-ar');
+                if (supported) {
+                    // If AR is supported, start the AR session automatically or via a button
+                    startARSession(); // Automatically start AR session
+                } else {
+                    console.warn('AR not supported on this device');
                 }
-                
-                if (!draggingController) {
-                    draggingController = controllers.find(controller => {
-                        const intersections = getIntersections(controller);
-                        return intersections.length > 0;
-                    });
-                }
-                
-                if (draggingController) {
-                    // Calculate new position
-                    const newPosition = new THREE.Vector3();
-                    newPosition.addVectors(draggingController.position, dragOffset);
-                    
-                    // Get camera position for depth constraint
-                    const cameraPosition = new THREE.Vector3();
-                    camera.getWorldPosition(cameraPosition);
-                    
-                    // Calculate distance from camera
-                    const distance = newPosition.distanceTo(cameraPosition);
-                    
-                    // Apply depth constraints
-                    if (distance < MIN_DEPTH) {
-                        // Push away from camera
-                        const direction = new THREE.Vector3().subVectors(newPosition, cameraPosition).normalize();
-                        newPosition.copy(cameraPosition).add(direction.multiplyScalar(MIN_DEPTH));
-                    } else if (distance > MAX_DEPTH) {
-                        // Pull closer to camera
-                        const direction = new THREE.Vector3().subVectors(newPosition, cameraPosition).normalize();
-                        newPosition.copy(cameraPosition).add(direction.multiplyScalar(MAX_DEPTH));
-                    }
-                    
-                    windowGroup.position.copy(newPosition);
-                }
+            } catch (error) {
+                console.error('Error checking AR support:', error);
             }
         }
-        
-        function toggleControllerRays() {
-            controllers.forEach(controller => {
-                const line = controller.getObjectByName('line');
-                if (line) {
-                    line.visible = !line.visible;
-                    line.material.opacity = line.visible ? 1 : 0;
-                }
-            });
-            
-            const anyVisible = controllers.some(controller => {
-                const line = controller.getObjectByName('line');
-                return line && line.visible;
-            });
-            
-            statusDiv.textContent = `Status: Controller rays ${anyVisible ? 'visible' : 'hidden'}`;
-        }
-        
-        function applyWindowScale() {
-            // Apply the current scale to the window group
-            windowGroup.scale.set(windowScale, windowScale, windowScale);
-        }
-        
-        function resetWindowPosition() {
-            if (windowGroup) {
-                // Reset to center position, follow offset, and scale
-                followOffset.set(0, 0, -0.6);
-                windowGroup.position.set(0, 0, -0.6);
-                windowScale = 1.0;
-                applyWindowScale();
-                
-                // Reset scale handle position
-                scaleHandle.position.set(0.185, -0.11, 0.005);
-                
-                statusDiv.textContent = 'Status: Window reset to center - following head';
-            }
-        }
-        
-        function updateWindowOrientation() {
-            if (!windowGroup || !camera) return;
-            
-            if (!isDragging && !isScaling) {
-                // When not dragging or scaling, make window follow head movement
-                const cameraPosition = new THREE.Vector3();
-                const cameraQuaternion = new THREE.Quaternion();
-                camera.getWorldPosition(cameraPosition);
-                camera.getWorldQuaternion(cameraQuaternion);
-                
-                // Apply the follow offset in camera space
-                const offset = followOffset.clone();
-                offset.applyQuaternion(cameraQuaternion);
-                
-                // Position the window relative to camera
-                windowGroup.position.copy(cameraPosition).add(offset);
-            }
-            
-            // Always make the window face the camera
-            const cameraPosition = new THREE.Vector3();
-            camera.getWorldPosition(cameraPosition);
-            windowGroup.lookAt(cameraPosition);
-            
-            // Apply current scale
-            if (!isDragging && !isScaling) {
-                applyWindowScale();
-            }
-        }
-        
+
+        // Starts the immersive AR session
         async function startARSession() {
             try {
-                if (!navigator.xr) {
-                    throw new Error('WebXR not supported in this browser');
-                }
-                
-                if (!renderer.xr) {
-                    throw new Error('WebXR not available on renderer');
-                }
-                
-                const supported = await navigator.xr.isSessionSupported('immersive-ar');
-                if (!supported) {
-                    throw new Error('AR not supported on this device');
-                }
-                
                 arSession = await navigator.xr.requestSession('immersive-ar', {
                     requiredFeatures: ['local-floor'],
                     optionalFeatures: ['local', 'bounded-floor']
                 });
-                
+
                 await renderer.xr.setSession(arSession);
-                
-                // Set up reference space with fallback
-                let referenceSpace;
-                try {
-                    referenceSpace = await arSession.requestReferenceSpace('local-floor');
-                    console.log('Using local-floor reference space');
-                } catch (e) {
-                    console.log('local-floor not supported, falling back to local');
-                    try {
-                        referenceSpace = await arSession.requestReferenceSpace('local');
-                        console.log('Using local reference space');
-                    } catch (e2) {
-                        console.log('local not supported, falling back to viewer');
-                        referenceSpace = await arSession.requestReferenceSpace('viewer');
-                        console.log('Using viewer reference space');
-                    }
-                }
-                
+
                 arSession.addEventListener('end', () => {
-                    isARActive = false;
-                    startButton.disabled = false;
-                    stopButton.disabled = true;
-                    statusDiv.textContent = 'Status: AR session ended';
+                    console.log('AR session ended.');
+                    // Handle session end if needed, e.g., reset UI
                 });
-                
-                isARActive = true;
-                startButton.disabled = true;
-                stopButton.disabled = false;
-                statusDiv.textContent = 'Status: AR session active - window following head';
-                
-                // Start the render loop
+
+                // Start the render loop for AR
                 renderer.setAnimationLoop(render);
-                
+
             } catch (error) {
                 console.error('AR session failed:', error);
-                statusDiv.textContent = `Status: Error - ${error.message}`;
+                alert(`AR session failed: ${error.message}. Make sure your device supports WebXR AR.`);
             }
         }
-        
-        function stopARSession() {
-            if (arSession) {
-                arSession.end();
-            }
-        }
-        
+
+        // Main render loop
         function render() {
-            if (isARActive) {
-                updateWindowOrientation();
-                updateDragging();
-            }
             renderer.render(scene, camera);
         }
-        
-        // Event listeners
-        startButton.addEventListener('click', startARSession);
-        stopButton.addEventListener('click', stopARSession);
-        resetButton.addEventListener('click', resetWindowPosition);
-        toggleRaysButton.addEventListener('click', toggleControllerRays);
-        
+
         // Handle window resize
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
-        
-        // Initialize the scene
-        initScene();
-        
-        function checkWebXRSupport() {
-            if (!navigator.xr) {
-                statusDiv.textContent = 'Status: WebXR not available in this browser';
-                startButton.disabled = true;
-                return;
-            }
-            
-            if (!renderer.xr) {
-                statusDiv.textContent = 'Status: WebXR not available on renderer';
-                startButton.disabled = true;
-                return;
-            }
-            
-            navigator.xr.isSessionSupported('immersive-ar').then(supported => {
-                if (supported) {
-                    statusDiv.textContent = 'Status: AR ready - checking reference spaces...';
-                    navigator.xr.requestSession('immersive-ar', {
-                        optionalFeatures: ['local', 'local-floor', 'bounded-floor', 'viewer']
-                    }).then(session => {
-                        const checkSpaces = async () => {
-                            const spaces = [];
-                            try {
-                                await session.requestReferenceSpace('local-floor');
-                                spaces.push('local-floor');
-                            } catch (e) {}
-                            try {
-                                await session.requestReferenceSpace('local');
-                                spaces.push('local');
-                            } catch (e) {}
-                            try {
-                                await session.requestReferenceSpace('viewer');
-                                spaces.push('viewer');
-                            } catch (e) {}
-                            try {
-                                await session.requestReferenceSpace('bounded-floor');
-                                spaces.push('bounded-floor');
-                            } catch (e) {}
-                            
-                            statusDiv.textContent = `Status: AR ready (${spaces.join(', ')})`;
-                        };
-                        checkSpaces();
-                        session.end();
-                    }).catch(() => {
-                        statusDiv.textContent = 'Status: AR ready (limited support)';
-                    });
-                } else {
-                    statusDiv.textContent = 'Status: AR not supported on this device';
-                    startButton.disabled = true;
-                }
-            }).catch(error => {
-                console.error('Error checking AR support:', error);
-                statusDiv.textContent = 'Status: Error checking AR support';
-                startButton.disabled = true;
-            });
-        }
-        
-        // Check WebXR support after scene is initialized
-        checkWebXRSupport();
-        
-        // Update window content periodically
-        setInterval(() => {
-            if (isARActive && windowGroup) {
-                const textMesh = windowGroup.children[1];
-                if (textMesh && textMesh.material.map) {
-                    const canvas = textMesh.material.map.image;
-                    const ctx = canvas.getContext('2d');
-                    
-                    // Clear and redraw with updated time
-                    ctx.fillStyle = '#1a1a1a';
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    
-                    ctx.fillStyle = '#ffffff';
-                    ctx.font = '36px Arial';
-                    ctx.textAlign = 'center';
-                    ctx.fillText('AR Window', canvas.width / 2, 70);
-                    
-                    ctx.font = '24px Arial';
-                    ctx.fillText('Drag to move', canvas.width / 2, 120);
-                    
-                    ctx.fillStyle = '#4CAF50';
-                    ctx.font = '20px Arial';
-                    ctx.fillText(`Time: ${new Date().toLocaleTimeString()}`, canvas.width / 2, 160);
-                    
-                    if (isDragging) {
-                        ctx.fillStyle = '#ff9800';
-                        ctx.font = '18px Arial';
-                        ctx.fillText('Dragging...', canvas.width / 2, 240);
-                    } else if (isScaling) {
-                        ctx.fillStyle = '#ff9800';
-                        ctx.font = '18px Arial';
-                        ctx.fillText('Scaling...', canvas.width / 2, 240);
-                    } else {
-                        ctx.fillStyle = '#2196F3';
-                        ctx.font = '18px Arial';
-                        ctx.fillText('Following head movement', canvas.width / 2, 240);
-                    }
-                    
-                    // Show scale info
-                    ctx.fillStyle = '#9c27b0';
-                    ctx.font = '16px Arial';
-                    ctx.fillText(`Scale: ${windowScale.toFixed(2)}x`, canvas.width / 2, 270);
-                    
-                    // Show position info
-                    const pos = windowGroup.position;
-                    const distance = pos.length();
-                    ctx.fillText(`Distance: ${distance.toFixed(2)}m`, canvas.width / 2, 290);
-                    
-                    textMesh.material.map.needsUpdate = true;
-                }
-            }
-        }, 1000);
+
+        // Initialize the scene when the page loads
+        window.onload = initScene;
     </script>
 </body>
 </html>
