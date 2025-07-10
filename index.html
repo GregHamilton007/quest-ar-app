@@ -17,6 +17,42 @@
             height: 100vh;
             display: block; /* Ensure canvas fills the container */
         }
+        #ui {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            color: white;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        #ui button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+        }
+        #ui button:hover {
+            background: #45a049;
+            transform: scale(1.02);
+        }
+        #ui button:active {
+            transform: scale(0.98);
+        }
+        #ui button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
         #playButtonOverlay {
             position: absolute;
             top: 0;
@@ -27,7 +63,7 @@
             align-items: center;
             justify-content: center;
             background: rgba(0, 0, 0, 0.75); /* Semi-transparent black overlay */
-            z-index: 100; /* Ensure it's above the canvas */
+            z-index: 100; /* Ensure it's above the canvas and UI */
         }
         #playButton {
             padding: 20px 40px;
@@ -60,21 +96,26 @@
             font-size: 14px;
             text-align: center;
             z-index: 99; /* Below play button, above canvas */
-            display: none; /* Hidden by default, shown after play */
+            display: block;
         }
     </style>
 </head>
 <body>
     <div id="container"></div>
 
+    <div id="ui">
+        <h3>AR Video App Controls</h3>
+        <button id="startARButton" disabled>Start AR Session</button>
+        <button id="stopARButton" disabled>Stop AR Session</button>
+        <div id="status">Checking WebXR support...</div>
+    </div>
+
     <div id="playButtonOverlay">
         <button id="playButton">Play Video</button>
     </div>
 
     <div id="instructions">
-        Use 'W' (forward) and 'S' (backward) keys to move.
-        <br/>
-        On touch devices, swipe up/down to move.
+        Click "Play Video" to start the video.
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -82,6 +123,9 @@
         let scene, camera, renderer, arSession;
         let videoElement, videoTexture, videoScreen;
         let playButtonOverlay, playButton, instructionsDiv;
+        let startARButton, stopARButton, statusDiv;
+        let isVideoPlaying = false;
+        let isARActive = false;
 
         // Camera movement speed
         const moveSpeed = 0.05;
@@ -112,11 +156,16 @@
             playButtonOverlay = document.getElementById('playButtonOverlay');
             playButton = document.getElementById('playButton');
             instructionsDiv = document.getElementById('instructions');
+            startARButton = document.getElementById('startARButton');
+            stopARButton = document.getElementById('stopARButton');
+            statusDiv = document.getElementById('status');
 
-            // Add event listener for the play button
+            // Add event listeners for the buttons
             playButton.addEventListener('click', handlePlayVideo);
+            startARButton.addEventListener('click', startARSession);
+            stopARButton.addEventListener('click', stopARSession);
 
-            // Set up WebXR session (without starting it immediately)
+            // Check WebXR support and update initial button states
             checkWebXRSupport();
 
             // Add keyboard and touch controls for camera movement
@@ -160,17 +209,25 @@
         }
 
         // Handles starting video playback
-        function handlePlayVideo() {
-            if (videoElement) {
-                videoElement.play().then(() => {
-                    // Hide the play button overlay after successful playback
-                    playButtonOverlay.style.display = 'none';
-                    instructionsDiv.style.display = 'block'; // Show instructions
-                    console.log('Video started playing.');
-                }).catch(error => {
-                    console.error("Error playing video:", error);
-                    alert("Video autoplay blocked. Please allow media playback in your browser settings or interact with the page.");
-                });
+        async function handlePlayVideo() {
+            if (!videoElement) {
+                instructionsDiv.textContent = "Error: Video element not found.";
+                return;
+            }
+
+            try {
+                await videoElement.play();
+                isVideoPlaying = true;
+                console.log('Video started playing.');
+                playButtonOverlay.style.display = 'none'; // Hide play button overlay
+                instructionsDiv.textContent = "Video playing. Use 'W'/'S' or swipe up/down to move. Click 'Start AR Session' to enter AR.";
+                startARButton.disabled = false; // Enable AR start button
+                statusDiv.textContent = "Video playing.";
+
+            } catch (error) {
+                console.error("Error playing video:", error);
+                instructionsDiv.textContent = `Error playing video: ${error.message}. Please allow media playback.`;
+                statusDiv.textContent = "Video playback failed.";
             }
         }
 
@@ -178,6 +235,9 @@
         function setupMovementControls() {
             // Keyboard controls
             const handleKeyDown = (event) => {
+                // Only allow movement if video is playing or AR is active
+                if (!isVideoPlaying && !isARActive) return;
+
                 switch (event.key) {
                     case 'w': // Move forward
                         camera.position.z -= moveSpeed;
@@ -194,12 +254,16 @@
             // Touch controls (simple swipe up/down for forward/backward)
             let touchStartY = 0;
             const handleTouchStart = (event) => {
+                // Only allow movement if video is playing or AR is active
+                if (!isVideoPlaying && !isARActive) return;
                 if (event.touches.length > 0) {
                     touchStartY = event.touches[0].clientY;
                 }
             };
 
             const handleTouchEnd = (event) => {
+                // Only allow movement if video is playing or AR is active
+                if (!isVideoPlaying && !isARActive) return;
                 if (event.changedTouches.length > 0) {
                     const touchEndY = event.changedTouches[0].clientY;
                     const deltaY = touchEndY - touchStartY;
@@ -220,25 +284,39 @@
         async function checkWebXRSupport() {
             if (!navigator.xr) {
                 console.warn('WebXR not available in this browser');
-                // You might want to update a status message on the page here
+                statusDiv.textContent = 'WebXR not available in this browser.';
+                playButton.disabled = true;
                 return;
             }
 
             try {
                 const supported = await navigator.xr.isSessionSupported('immersive-ar');
                 if (supported) {
-                    // If AR is supported, start the AR session automatically or via a button
-                    startARSession(); // Automatically start AR session
+                    statusDiv.textContent = 'AR (immersive-ar) supported.';
+                    playButton.disabled = false; // Enable play button if AR is supported
                 } else {
-                    console.warn('AR not supported on this device');
+                    console.warn('AR (immersive-ar) not supported on this device');
+                    statusDiv.textContent = 'AR (immersive-ar) not supported on this device.';
+                    playButton.disabled = true; // Disable play button if AR is not supported
                 }
             } catch (error) {
                 console.error('Error checking AR support:', error);
+                statusDiv.textContent = `Error checking AR support: ${error.message}`;
+                playButton.disabled = true; // Disable play button on error
             }
         }
 
         // Starts the immersive AR session
         async function startARSession() {
+            if (!navigator.xr) {
+                statusDiv.textContent = 'WebXR not available for AR session.';
+                return;
+            }
+            if (isARActive) {
+                statusDiv.textContent = 'AR session already active.';
+                return;
+            }
+
             try {
                 arSession = await navigator.xr.requestSession('immersive-ar', {
                     requiredFeatures: ['local-floor'],
@@ -247,9 +325,19 @@
 
                 await renderer.xr.setSession(arSession);
 
+                isARActive = true;
+                startARButton.disabled = true;
+                stopARButton.disabled = false;
+                instructionsDiv.textContent = "AR session active. Use 'W'/'S' or swipe up/down to move.";
+                statusDiv.textContent = "AR session active.";
+
                 arSession.addEventListener('end', () => {
                     console.log('AR session ended.');
-                    // Handle session end if needed, e.g., reset UI
+                    isARActive = false;
+                    startARButton.disabled = false; // Allow restarting AR
+                    stopARButton.disabled = true;
+                    instructionsDiv.textContent = 'AR session ended. Click "Start AR Session" to restart.';
+                    statusDiv.textContent = 'AR session ended.';
                 });
 
                 // Start the render loop for AR
@@ -257,7 +345,18 @@
 
             } catch (error) {
                 console.error('AR session failed:', error);
-                alert(`AR session failed: ${error.message}. Make sure your device supports WebXR AR.`);
+                statusDiv.textContent = `AR session failed: ${error.message}. Ensure your device supports WebXR AR.`;
+                startARButton.disabled = false; // Re-enable button on failure
+                stopARButton.disabled = true;
+            }
+        }
+
+        // Stops the immersive AR session
+        function stopARSession() {
+            if (arSession && isARActive) {
+                arSession.end(); // This will trigger the 'end' event listener
+            } else {
+                statusDiv.textContent = 'No active AR session to stop.';
             }
         }
 
